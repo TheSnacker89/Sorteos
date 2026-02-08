@@ -4,20 +4,25 @@ import random
 import re
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Mi Sorteo YouTube", page_icon="🎉")
+st.set_page_config(page_title="Sorteos Pro", page_icon="🏆", layout="centered")
 
-st.title("🎉 Sorteos de YouTube (Privado)")
-st.write("Herramienta personal para elegir ganadores desde comentarios.")
+st.title("🎉 Sorteo de YouTube Pro")
+st.write("Configura tus ganadores y suplentes fácilmente.")
 
-# --- BARRA LATERAL PARA CONFIGURACIÓN ---
+# --- BARRA LATERAL ---
 with st.sidebar:
-    st.header("Configuración")
+    st.header("⚙️ Configuración")
     api_key = st.text_input("Tu API Key de Google", type="password")
-    st.info("Pega aquí la clave que obtuviste en Google Cloud Console.")
+    
+    st.divider()
+    st.subheader("Opciones del Sorteo")
+    num_ganadores = st.number_input("Número de ganadores", min_value=1, max_value=50, value=1)
+    num_suplentes = st.number_input("Número de suplentes", min_value=0, max_value=10, value=0)
+    
+    st.info("Nota: Los suplentes se eligen de la lista restante después de sacar a los ganadores.")
 
 # --- FUNCIONES ---
 def obtener_id_video(url):
-    """Extrae el ID del video de varios formatos de URL de YouTube"""
     pattern = r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
     match = re.search(pattern, url)
     return match.group(1) if match else None
@@ -30,82 +35,92 @@ def obtener_comentarios(api_key, video_id, palabra_clave=None):
         request = youtube.commentThreads().list(
             part="snippet",
             videoId=video_id,
-            maxResults=100, # Trae de 100 en 100
+            maxResults=100,
             textFormat="plainText"
         )
         
-        with st.spinner('Leyendo comentarios...'):
+        with st.spinner('Extrayendo comentarios de YouTube...'):
             while request:
                 response = request.execute()
-                
                 for item in response['items']:
-                    comentario = item['snippet']['topLevelComment']['snippet']
-                    texto = comentario['textDisplay']
-                    autor = comentario['authorDisplayName']
+                    snippet = item['snippet']['topLevelComment']['snippet']
+                    # El ID del comentario sirve para crear el enlace directo
+                    comment_id = item['snippet']['topLevelComment']['id']
+                    texto = snippet['textDisplay']
+                    autor = snippet['authorDisplayName']
                     
-                    # Filtro de palabra clave (si existe)
+                    datos = {
+                        "Autor": autor, 
+                        "Comentario": texto,
+                        "Link": f"https://www.youtube.com/watch?v={video_id}&lc={comment_id}"
+                    }
+                    
                     if palabra_clave:
                         if palabra_clave.lower() in texto.lower():
-                            comentarios.append({"Autor": autor, "Comentario": texto})
+                            comentarios.append(datos)
                     else:
-                        comentarios.append({"Autor": autor, "Comentario": texto})
+                        comentarios.append(datos)
                 
-                # Paginación (si hay más de 100 comentarios)
                 if 'nextPageToken' in response:
                     request = youtube.commentThreads().list(
-                        part="snippet",
-                        videoId=video_id,
-                        maxResults=100,
-                        textFormat="plainText",
-                        pageToken=response['nextPageToken']
+                        part="snippet", videoId=video_id, maxResults=100,
+                        textFormat="plainText", pageToken=response['nextPageToken']
                     )
                 else:
                     break
         return comentarios
-            
     except Exception as e:
-        st.error(f"Error al conectar con YouTube: {e}")
+        st.error(f"Error: {e}")
         return []
 
 # --- INTERFAZ PRINCIPAL ---
-url_video = st.text_input("Pegar enlace del video de YouTube:")
-palabra_filtro = st.text_input("Palabra clave obligatoria (Opcional):", placeholder="Ej: participo")
+url_video = st.text_input("Enlace del video:")
+palabra_filtro = st.text_input("Palabra clave (opcional):")
 
-if st.button("¡Cargar Comentarios!", type="primary"):
+if st.button("Cargar Participantes", type="primary"):
     if not api_key:
-        st.warning("Por favor ingresa tu API Key en la barra lateral.")
+        st.warning("Falta la API Key.")
     elif not url_video:
-        st.warning("Por favor ingresa un enlace de video.")
+        st.warning("Falta el enlace.")
     else:
         video_id = obtener_id_video(url_video)
         if video_id:
-            participantes = obtener_comentarios(api_key, video_id, palabra_filtro)
-            
-            if participantes:
-                st.success(f"¡Se encontraron {len(participantes)} participantes válidos!")
-                
-                # Guardar en sesión para no perderlos al hacer click en sortear
-                st.session_state['participantes'] = participantes
+            res = obtener_comentarios(api_key, video_id, palabra_filtro)
+            if res:
+                st.session_state['participantes'] = res
+                st.success(f"¡{len(res)} comentarios cargados!")
             else:
-                st.warning("No se encontraron comentarios (o ninguno con la palabra clave).")
+                st.warning("No se encontraron comentarios.")
+
+# --- PROCESO DE SORTEO ---
+if 'participantes' in st.session_state:
+    if st.button("✨ ¡REALIZAR SORTEO!"):
+        participantes = st.session_state['participantes'].copy()
+        total_necesario = num_ganadores + num_suplentes
+        
+        if len(participantes) < total_necesario:
+            st.error(f"No hay suficientes participantes. Tienes {len(participantes)} y necesitas {total_necesario}.")
         else:
-            st.error("URL de video no válida.")
-
-# --- SECCIÓN DE SORTEO ---
-if 'participantes' in st.session_state and len(st.session_state['participantes']) > 0:
-    st.divider()
-    st.subheader("🏆 Zona de Ganadores")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("✨ Elegir Ganador Aleatorio"):
-            ganador = random.choice(st.session_state['participantes'])
-            st.balloons() # ¡Efecto de globos!
-            st.markdown(f"### El ganador es:")
-            st.markdown(f"# 👤 {ganador['Autor']}")
-            st.info(f"Comentario: {ganador['Comentario']}")
-
-    with col2:
-        with st.expander("Ver lista de participantes"):
-            st.table(st.session_state['participantes'])
+            random.shuffle(participantes) # Mezclamos la lista
+            
+            ganadores = participantes[:num_ganadores]
+            suplentes = participantes[num_ganadores:total_necesario]
+            
+            st.balloons()
+            
+            st.header("🏆 GANADORES")
+            for i, g in enumerate(ganadores, 1):
+                with st.container():
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        st.subheader(f"{i}. {g['Autor']}")
+                        st.write(f"💬 {g['Comentario']}")
+                    with col_b:
+                        st.link_button("🔗 Ver comentario", g['Link'])
+                st.divider()
+            
+            if suplentes:
+                st.header("⏳ SUPLENTES")
+                for i, s in enumerate(suplentes, 1):
+                    st.write(f"**Suplente {i}:** {s['Autor']}")
+                    
